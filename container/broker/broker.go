@@ -88,11 +88,16 @@ func finishNetworkConfig(interfaces corenetwork.InterfaceInfos) (corenetwork.Int
 
 		logger.Warningf("incomplete DNS config found, discovering host's DNS config")
 		dnsConfig, err := findDNSServerConfig()
+		logger.Infof(
+			"HOST DNS discovered: nameservers=%v searchDomains=%v",
+			dnsConfig.Nameservers, dnsConfig.SearchDomains,
+		)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-
+		logger.Infof("RESULTS object BEFORE associateDNSConfig(): %+v", results)
 		results = associateDNSConfig(results, dnsConfig)
+		logger.Infof("RESULTS object AFTER associateDNSConfig(): %+v", results)
 	}
 
 	return results, nil
@@ -107,6 +112,13 @@ func associateDNSConfig(nics corenetwork.InterfaceInfos, dns *corenetwork.DNSCon
 
 	results := make(corenetwork.InterfaceInfos, len(nics))
 	for i, nic := range nics {
+		logger.Infof(
+			"NIC %q BEFORE DNS association: DNSServers=%v, SearchDomains=%v, Addresses=%v",
+			nic.InterfaceName,
+			nic.DNSServers,
+			nic.DNSSearchDomains,
+			nic.Addresses,
+		)
 		// Associate the search domains with every NIC.
 		logger.Infof("setting DNS domains %+v for interface %q", dns.SearchDomains, nic.InterfaceName)
 		nic.DNSSearchDomains = dns.SearchDomains
@@ -136,6 +148,11 @@ func associateDNSConfig(nics corenetwork.InterfaceInfos, dns *corenetwork.DNSCon
 					// Make sure we only add the nameserver to this device once.
 					nsAddr := dns.Nameservers[j].Value
 					if nameservers.Contains(nsAddr) {
+						logger.Infof(
+							"nameserver %q already associated with interface %q; skipping",
+							nsAddr,
+							nic.InterfaceName,
+						)
 						continue
 					}
 
@@ -148,6 +165,14 @@ func associateDNSConfig(nics corenetwork.InterfaceInfos, dns *corenetwork.DNSCon
 		}
 
 		results[i] = nic
+
+		logger.Infof(
+			"NIC %q AFTER DNS association: DNSServers=%v, SearchDomains=%v, Addresses=%v",
+			nic.InterfaceName,
+			nic.DNSServers,
+			nic.DNSSearchDomains,
+			nic.Addresses,
+		)
 	}
 
 	// In the event that any nameservers were not associated by subnet,
@@ -158,7 +183,24 @@ func associateDNSConfig(nics corenetwork.InterfaceInfos, dns *corenetwork.DNSCon
 			continue
 		}
 		for j := range results {
-			results[j].DNSServers = append(results[j].DNSServers, dns.Nameservers[i])
+			// Skip adding this DNS server if it’s already configured
+			// on the interface to prevent duplicates.
+			alreadyPresent := false
+			for _, nameserver := range results[j].DNSServers {
+				if nameserver.Value == dns.Nameservers[i].Value {
+					alreadyPresent = true
+					logger.Infof(
+						"nameserver %q already present for interface %q during fallback; skipping",
+						nameserver.Value,
+						results[j].InterfaceName,
+					)
+					break
+				}
+			}
+			if !alreadyPresent {
+				results[j].DNSServers = append(results[j].DNSServers, dns.Nameservers[i])
+				logger.Infof("Fallback DNS added: %q to NIC %q", dns.Nameservers[i].Value, results[j].InterfaceName)
+			}
 		}
 	}
 
